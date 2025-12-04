@@ -38,6 +38,7 @@ dependencies:
   shared_preferences:
   network_info_plus:
   uuid:
+  connectivity_plus: ^5.0.2
 
 dev_dependencies:
   flutter_test:

@@ -1,9 +1,11 @@
 
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:network_info_plus/network_info_plus.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 void main() {
   runApp(MyApp());
@@ -33,6 +35,8 @@ class _LoginAndConfigScreenState extends State<LoginAndConfigScreen> {
   final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   final _serverCtrl = TextEditingController(text: 'http://192.168.4.1:3001');
+  final _manualUserUuidCtrl = TextEditingController();
+  StreamSubscription? _connSub;
 
   // Device fields
   final _deviceUuidCtrl = TextEditingController();
@@ -56,7 +60,23 @@ class _LoginAndConfigScreenState extends State<LoginAndConfigScreen> {
   void initState() {
     super.initState();
     _loadSaved();
+    _startWifiListener();
     _autoDetectGateway();
+  }
+
+  @override
+  void dispose() {
+    _connSub?.cancel();
+    super.dispose();
+  }
+
+  void _startWifiListener() {
+    _connSub = Connectivity().onConnectivityChanged.listen((result) async {
+      if (result == ConnectivityResult.wifi) {
+        // WiFi connected → try autodetect again
+        await _autoDetectGateway();
+      }
+    });
   }
 
   Future<void> _loadSaved() async {
@@ -74,7 +94,11 @@ class _LoginAndConfigScreenState extends State<LoginAndConfigScreen> {
       _ssidCtrl.text = _prefs?.getString('ssid') ?? '';
       _wifiPassCtrl.text = _prefs?.getString('wifiPass') ?? '';
       _serverCtrl.text = _prefs?.getString('serverBase') ?? _serverCtrl.text;
+      _manualUserUuidCtrl.text = _prefs?.getString('manualUserUuid') ?? '';
     });
+    if (_manualUserUuidCtrl.text.isNotEmpty) {
+      _savedUserUuid = _manualUserUuidCtrl.text.trim();
+    }
   }
 
   Future<void> _saveAll() async {
@@ -90,6 +114,11 @@ class _LoginAndConfigScreenState extends State<LoginAndConfigScreen> {
     await _prefs!.setString('ssid', _ssidCtrl.text);
     await _prefs!.setString('wifiPass', _wifiPassCtrl.text);
     await _prefs!.setString('serverBase', _serverCtrl.text);
+    await _prefs!.setString('manualUserUuid', _manualUserUuidCtrl.text);
+    if (_manualUserUuidCtrl.text.isNotEmpty) {
+      _savedUserUuid = _manualUserUuidCtrl.text.trim();
+    }
+
   }
 
   Future<void> _autoDetectGateway() async {
@@ -116,7 +145,7 @@ class _LoginAndConfigScreenState extends State<LoginAndConfigScreen> {
   }
 
   bool _isUuidV4(String s) {
-    final re = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\$');
+    final re = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$');
     return re.hasMatch(s);
   }
 
@@ -139,9 +168,10 @@ class _LoginAndConfigScreenState extends State<LoginAndConfigScreen> {
           _savedUserUuid = jsonResp['uuid'] ?? '';
         });
         await _saveAll();
-        _setStatus('Registered. UUID: ${_savedUserUuid}');
+        _setStatus('Registered. UUID: $_savedUserUuid');
       } else {
-        _setStatus('Register failed: ${jsonResp['error'] ?? resp.body}');
+        var chstr = jsonResp['error'] ?? resp.body;
+        _setStatus('Register failed: $chstr + raw: $resp');
       }
     } catch (e) {
       _setStatus('Register error: $e');
@@ -150,7 +180,7 @@ class _LoginAndConfigScreenState extends State<LoginAndConfigScreen> {
 
   Future<void> _login() async {
     final base = _serverCtrl.text.trim();
-    final url = Uri.parse(base + '/login');
+    final url = Uri.parse('$base/login');
     final username = _usernameCtrl.text.trim();
     final password = _passwordCtrl.text;
     if (username.isEmpty || password.isEmpty) {
@@ -177,7 +207,7 @@ class _LoginAndConfigScreenState extends State<LoginAndConfigScreen> {
 
   Future<void> _addDevice() async {
     final base = _serverCtrl.text.trim();
-    final url = Uri.parse(base + '/add-device');
+    final url = Uri.parse('$base/add-device');
     final deviceName = _deviceNameCtrl.text.trim();
     if (deviceName.isEmpty) {
       _setStatus('Device name required');
@@ -302,13 +332,23 @@ class _LoginAndConfigScreenState extends State<LoginAndConfigScreen> {
               ]),
 
               Divider(height: 30),
-
-              Text('User info (always visible)', style: TextStyle(fontWeight: FontWeight.w600)),
-              SizedBox(height: 6),
               SelectableText('User UUID: ${_savedUserUuid.isNotEmpty ? _savedUserUuid : "(not set)"}'),
               SizedBox(height: 4),
-              SelectableText('Password (debug): ${_passwordCtrl.text}'),
-
+              SelectableText('Password: ${_passwordCtrl.text}'),
+              SizedBox(height: 12),
+              TextField(
+                controller: _manualUserUuidCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Manual User UUID (override)',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (v) async {
+                  setState(() {
+                    _savedUserUuid = v.trim();
+                  });
+                  await _saveAll();
+                },
+              ),
               Divider(height: 30),
 
               Text('Device', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
@@ -319,11 +359,9 @@ class _LoginAndConfigScreenState extends State<LoginAndConfigScreen> {
               SizedBox(height: 8),
               ElevatedButton(onPressed: () async { await _addDevice(); }, child: Text('Register the device')),
               SizedBox(height: 12),
-              Text(_deviceUuidCtrl.text.isNotEmpty && !_isUuidV4(_deviceUuidCtrl.text) ? 'Device UUID looks invalid (not v4)' : '' , style: TextStyle(color: Colors.red)),
-
               Divider(height: 30),
 
-              Text('ESP / Network (auto-detected but editable)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+              Text('ESP / Network', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
               SizedBox(height: 8),
               Row(children: [
                 Expanded(child: TextField(controller: _espIpCtrl, decoration: InputDecoration(labelText: 'ESP IP'))),
@@ -348,10 +386,7 @@ class _LoginAndConfigScreenState extends State<LoginAndConfigScreen> {
               SizedBox(height: 18),
               Text('Status:', style: TextStyle(fontWeight: FontWeight.w700)),
               SizedBox(height: 6),
-              Text(_status),
-
-              SizedBox(height: 20),
-              Text('Note: All input values are persisted locally between restarts and app updates using SharedPreferences.'),
+              Text(_status)
             ],
           ),
         ),
