@@ -23,6 +23,7 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
 
   bool _showProvisioningForm = false;
   bool _isProvisioning = false;
+  bool _showUnnamedDevices = false;
 
   @override
   Widget build(BuildContext context) {
@@ -107,8 +108,21 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
             
             const SizedBox(height: 16),
             
+            // Filter toggle
+            Row(
+              children: [
+                Checkbox(
+                  value: _showUnnamedDevices,
+                  onChanged: (value) => setState(() => _showUnnamedDevices = value ?? false),
+                ),
+                const Text('Show unnamed devices'),
+              ],
+            ),
+            
+            const SizedBox(height: 8),
+            
             // Device List
-            if (bluetooth.discoveredDevices.isNotEmpty)
+            if (_getFilteredDevices(bluetooth).isNotEmpty)
               Container(
                 height: 200,
                 decoration: BoxDecoration(
@@ -116,9 +130,9 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: ListView.builder(
-                  itemCount: bluetooth.discoveredDevices.length,
+                  itemCount: _getFilteredDevices(bluetooth).length,
                   itemBuilder: (context, index) {
-                    final device = bluetooth.discoveredDevices[index];
+                    final device = _getFilteredDevices(bluetooth)[index];
                     final isConnected = bluetooth.connectedDevice?.id == device.id;
                     final hasName = device.name.isNotEmpty;
                     
@@ -259,16 +273,27 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
       await bluetooth.connectToDevice(device);
       setState(() {
         _selectedDevice = device;
-        _showProvisioningForm = true;
       });
       
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Connected to ${device.name.isNotEmpty ? device.name : device.id.toString()}'),
-            backgroundColor: Colors.green,
-          ),
-        );
+      // Wait a moment for service discovery to complete
+      await Future.delayed(const Duration(milliseconds: 500));
+      
+      // Check if we found the correct characteristic
+      if (bluetooth.isConnected) {
+        setState(() {
+          _showProvisioningForm = true;
+        });
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Connected to ${device.name.isNotEmpty ? device.name : device.id.toString()}'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        throw Exception('Failed to establish proper connection');
       }
     } catch (e) {
       if (mounted) {
@@ -337,6 +362,13 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
         setState(() => _isProvisioning = false);
       }
     }
+  }
+
+  List<BluetoothDevice> _getFilteredDevices(IoTBluetoothService bluetooth) {
+    if (_showUnnamedDevices) {
+      return bluetooth.discoveredDevices;
+    }
+    return bluetooth.discoveredDevices.where((device) => device.name.isNotEmpty).toList();
   }
 
   void _clearForm() {

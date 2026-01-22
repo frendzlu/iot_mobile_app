@@ -164,25 +164,40 @@ class IoTBluetoothService extends ChangeNotifier {
     _log('Discovering services...');
     final services = await _connectedDevice!.discoverServices();
 
+    // Look for our specific service UUID (0x1816)
+    const String targetServiceUuid = "00001816-0000-1000-8000-00805f9b34fb";
+    const String targetCharUuid = "00002a01-0000-1000-8000-00805f9b34fb";
+
     for (final service in services) {
       _log('Found service: ${service.uuid}');
       
-      for (final characteristic in service.characteristics) {
-        _log('Found characteristic: ${characteristic.uuid} - ${characteristic.properties}');
+      // Check if this is our target service
+      if (service.uuid.toString().toLowerCase() == targetServiceUuid.toLowerCase()) {
+        _log('Found target WiFi service!', level: models.LogLevel.success);
         
-        // Find writable characteristic for provisioning
-        if (characteristic.properties.write && _writeCharacteristic == null) {
-          _writeCharacteristic = characteristic;
-          _log('Set write characteristic: ${characteristic.uuid}', level: models.LogLevel.success);
-        }
-        
-        // Find notify characteristic for sensor data
-        if (characteristic.properties.notify && _notifyCharacteristic == null) {
-          _notifyCharacteristic = characteristic;
-          _log('Set notify characteristic: ${characteristic.uuid}', level: models.LogLevel.success);
+        for (final characteristic in service.characteristics) {
+          _log('Found characteristic: ${characteristic.uuid} - ${characteristic.properties}');
           
-          // Subscribe to notifications
-          await _subscribeToNotifications();
+          // Find our specific write characteristic for provisioning
+          if (characteristic.uuid.toString().toLowerCase() == targetCharUuid.toLowerCase() &&
+              characteristic.properties.write) {
+            _writeCharacteristic = characteristic;
+            _log('Set WiFi provisioning characteristic: ${characteristic.uuid}', level: models.LogLevel.success);
+          }
+        }
+      } else {
+        // For other services, find notify characteristics for sensor data
+        for (final characteristic in service.characteristics) {
+          _log('Found characteristic: ${characteristic.uuid} - ${characteristic.properties}');
+          
+          // Find notify characteristic for sensor data
+          if (characteristic.properties.notify && _notifyCharacteristic == null) {
+            _notifyCharacteristic = characteristic;
+            _log('Set notify characteristic: ${characteristic.uuid}', level: models.LogLevel.success);
+            
+            // Subscribe to notifications
+            await _subscribeToNotifications();
+          }
         }
       }
     }
@@ -221,7 +236,7 @@ class IoTBluetoothService extends ChangeNotifier {
   /// Send provisioning data to the connected device
   Future<void> sendProvisioningData(ProvisioningConfig config) async {
     if (_writeCharacteristic == null) {
-      throw Exception('No writable characteristic available');
+      throw Exception('No WiFi provisioning characteristic available. Make sure you are connected to the correct device.');
     }
 
     _log('Sending provisioning data...');
@@ -229,6 +244,8 @@ class IoTBluetoothService extends ChangeNotifier {
     try {
       final jsonData = jsonEncode(config.toJson());
       final payload = utf8.encode(jsonData);
+      
+      _log('Sending JSON: $jsonData');
       
       await _writeCharacteristic!.write(payload, withoutResponse: false);
       
