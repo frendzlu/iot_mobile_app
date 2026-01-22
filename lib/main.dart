@@ -1,7 +1,18 @@
 import 'package:flutter/material.dart';
-import 'app.dart';
+import 'package:provider/provider.dart';
 
-void main() {
+import 'app.dart';
+import 'features/auth/auth_provider.dart';
+
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const App());
+
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => AuthProvider()),
+      ],
+      child: const App(),
+    ),
+  );
 }

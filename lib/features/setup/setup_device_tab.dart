@@ -1,38 +1,71 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
 import '../../core/ble/ble_manager.dart';
-import '../auth/auth_provider.dart';
 
-class SetupDeviceTab extends StatelessWidget {
+class SetupDeviceTab extends StatefulWidget {
   const SetupDeviceTab({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final ble = context.watch<BleManager>();
-    final auth = context.watch<AuthProvider>();
+  State<SetupDeviceTab> createState() => _SetupDeviceTabState();
+}
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Setup Device')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            ElevatedButton(onPressed: ble.scanAndConnect, child: const Text('Scan & Connect')),
-            ElevatedButton(
-              onPressed: ble.writeChar == null
-                  ? null
-                  : () => ble.sendJson({
-                'userUuid': auth.userUuid,
-                'password': auth.passwordCtrl.text,
-                'deviceName': auth.deviceName,
-                'wifiSsid': auth.ssid,
-                'wifiPassword': auth.wifiPassword,
-              }),
-              child: const Text('Provision'),
+class _SetupDeviceTabState extends State<SetupDeviceTab> {
+  final _ble = BleManager();
+  final _deviceNameCtrl = TextEditingController();
+  bool _loading = false;
+  String? _status;
+
+  void _log(String msg) {
+    // ignore: avoid_print
+    print('[SETUP] $msg');
+  }
+
+  Future<void> _provision() async {
+    setState(() {
+      _loading = true;
+      _status = null;
+    });
+
+    try {
+      final name = _deviceNameCtrl.text.trim();
+      _log('Provisioning device $name');
+
+      await _ble.scanAndConnect(name);
+      await _ble.sendProvisioningData({
+        'deviceName': name,
+      });
+
+      _status = 'Provisioning sent successfully';
+    } catch (e) {
+      _log('Provisioning failed: $e');
+      _status = e.toString();
+    } finally {
+      setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        children: [
+          TextField(
+            controller: _deviceNameCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Device Name (BLE)',
             ),
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: _loading ? null : _provision,
+            child: const Text('Provision Device'),
+          ),
+          if (_status != null) ...[
+            const SizedBox(height: 16),
+            Text(_status!),
           ],
-        ),
+        ],
       ),
     );
   }

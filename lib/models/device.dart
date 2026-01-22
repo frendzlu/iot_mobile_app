@@ -1,6 +1,9 @@
 class Device {
-  final String uuid;
   final String name;
 
-  Device(this.uuid, this.name);
+  Device({required this.name});
+
+  factory Device.fromJson(Map<String, dynamic> json) {
+    return Device(name: json['name']);
+  }
 }

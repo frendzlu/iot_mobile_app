@@ -1,59 +1,65 @@
 import 'dart:convert';
-import 'dart:math';
-import 'package:flutter/material.dart';
+
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
-class BleManager extends ChangeNotifier {
-  BluetoothDevice? device;
-  BluetoothCharacteristic? writeChar;
-  BluetoothCharacteristic? notifyChar;
+class BleManager {
+  BluetoothDevice? _device;
+  BluetoothCharacteristic? _writeChar;
 
-  final List<String> logs = [];
+  void _log(String msg) {
+    // ignore: avoid_print
+    print('[BLE] $msg');
+  }
 
-  Stream<List<int>>? notificationStream;
+  Future<void> scanAndConnect(String deviceName) async {
+    _log('Starting BLE scan for $deviceName');
 
-  Future<void> scanAndConnect() async {
-    logs.add('[BLE] Starting scan');
-    notifyListeners();
-
-    FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
+    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
 
     FlutterBluePlus.scanResults.listen((results) async {
       for (final r in results) {
-        if (r.device.name.startsWith('ESP32')) {
-          logs.add('[BLE] Found ${r.device.name}');
-          device = r.device;
+        if (r.device.name == deviceName) {
+          _log('Found device ${r.device.id}');
+          _device = r.device;
           await FlutterBluePlus.stopScan();
-          await device!.connect();
-          await _discover();
+          await _device!.connect();
+          _log('Connected to BLE device');
+          await _discoverServices();
           return;
         }
       }
     });
   }
 
-  Future<void> _discover() async {
-    final services = await device!.discoverServices();
+  Future<void> _discoverServices() async {
+    final services = await _device!.discoverServices();
     for (final s in services) {
       for (final c in s.characteristics) {
-        if (c.properties.write) writeChar = c;
-        if (c.properties.notify) {
-          notifyChar = c;
-          await c.setNotifyValue(true);
-          notificationStream = c.value;
+        if (c.properties.write) {
+          _writeChar = c;
+          _log('Found writable characteristic ${c.uuid}');
+          return;
         }
       }
     }
-    logs.add('[BLE] Services discovered');
-    notifyListeners();
+    throw Exception('No writable characteristic found');
   }
 
-  Future<void> sendJson(Map<String, dynamic> data) async {
-    final bytes = utf8.encode(jsonEncode(data));
-    for (int i = 0; i < bytes.length; i += 180) {
-      await writeChar!.write(bytes.sublist(i, min(i + 180, bytes.length)));
+  Future<void> sendProvisioningData(Map<String, dynamic> data) async {
+    if (_writeChar == null) {
+      throw Exception('BLE not ready');
     }
-    logs.add('[BLE][TX] ${jsonEncode(data)}');
-    notifyListeners();
+
+    final payload = jsonEncode(data);
+    _log('Sending provisioning payload: $payload');
+
+    await _writeChar!.write(utf8.encode(payload), withoutResponse: true);
+  }
+
+  Future<void> disconnect() async {
+    if (_device != null) {
+      _log('Disconnecting BLE');
+      await _device!.disconnect();
+    }
   }
 }
