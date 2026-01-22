@@ -10,6 +10,7 @@ class AuthProvider extends ChangeNotifier {
   String? _username;
   String? _uuid;
   String? _backendUrl;
+  String? _password;
   bool _sessionValidated = false;
   Map<String, dynamic>? _userDevices;
 
@@ -17,6 +18,7 @@ class AuthProvider extends ChangeNotifier {
   String? get username => _username;
   String? get uuid => _uuid;
   String? get backendUrl => _backendUrl;
+  String? get password => _password;
   bool get hasBackend => _backendUrl != null && _backendUrl!.isNotEmpty;
   bool get isSessionValid => _sessionValidated;
   Map<String, dynamic>? get userDevices => _userDevices;
@@ -35,6 +37,7 @@ class AuthProvider extends ChangeNotifier {
     _backendUrl = await Prefs.getBackendUrl();
     _username = await Prefs.getUsername();
     _uuid = await Prefs.getUuid();
+    _password = await Prefs.getPassword();
 
     // Only set authenticated if we have all required data
     final hasStoredData = _backendUrl != null && _backendUrl!.isNotEmpty && _username != null && _uuid != null;
@@ -94,10 +97,12 @@ class AuthProvider extends ChangeNotifier {
 
     _username = result['username'];
     _uuid = result['uuid'];
+    _password = password; // Store the password for ESP32 provisioning
     _authenticated = true;
     _sessionValidated = true;
 
     await Prefs.setUser(_username!, _uuid!);
+    await Prefs.setPassword(_password!);
 
     // Load user devices after login
     await _loadUserDevices();
@@ -161,6 +166,7 @@ class AuthProvider extends ChangeNotifier {
     _sessionValidated = false;
     _username = null;
     _uuid = null;
+    _password = null;
     _userDevices = null;
     await Prefs.clear();
   }

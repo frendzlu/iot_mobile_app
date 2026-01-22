@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:network_info_plus/network_info_plus.dart';
 
 import 'auth_provider.dart';
 import '../../core/logging/log_service.dart';
@@ -28,6 +29,20 @@ class _LoginScreenState extends State<LoginScreen> {
 
   void _log(String msg, {LogLevel level = LogLevel.info}) {
     _logService.log('UI', msg, level: level);
+  }
+
+  /// Get the device's current IP address for default backend URL
+  Future<String> _getDefaultBackendUrl() async {
+    try {
+      final info = NetworkInfo();
+      final wifiIP = await info.getWifiIP();
+      if (wifiIP != null && wifiIP.isNotEmpty) {
+        return 'http://$wifiIP:3001';
+      }
+    } catch (e) {
+      _log('Failed to get WiFi IP: $e', level: LogLevel.warning);
+    }
+    return 'http://192.168.1.100:3001';
   }
 
   bool get _canLogin {
@@ -75,8 +90,11 @@ class _LoginScreenState extends State<LoginScreen> {
           _autodetectSuccess = true;
         });
       } else {
+        // If autodetection fails, use device IP as default
+        final defaultUrl = await _getDefaultBackendUrl();
+        _backendCtrl.text = defaultUrl;
         setState(() {
-          _autodetectStatus = 'No backend found. Please enter manually.';
+          _autodetectStatus = 'Using device IP as default. Please verify.';
           _autodetectSuccess = false;
         });
       }
@@ -84,8 +102,11 @@ class _LoginScreenState extends State<LoginScreen> {
       _log('Autodetect error: $e', level: LogLevel.error);
       if (!mounted) return; // Check again after async operation
       
+      // If autodetection fails, use device IP as default
+      final defaultUrl = await _getDefaultBackendUrl();
+      _backendCtrl.text = defaultUrl;
       setState(() {
-        _autodetectStatus = 'Detection failed. Please enter manually.';
+        _autodetectStatus = 'Using device IP as default. Please verify.';
         _autodetectSuccess = false;
       });
     } finally {
@@ -169,7 +190,7 @@ class _LoginScreenState extends State<LoginScreen> {
         title: const Text('IoT Manager Login'),
         backgroundColor: Theme.of(context).primaryColor,
       ),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:network_info_plus/network_info_plus.dart';
 import '../../core/ble/bluetooth_service.dart';
 import '../../models/provisioning_config.dart';
 import '../../models/device_status.dart';
@@ -80,6 +81,62 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
         ),
       );
     }
+  }
+
+  /// Get default backend URL - prioritize logged-in backend IP, then device IP
+  Future<String> _getDefaultBackendUrl() async {
+    // First try to use the IP from the logged-in backend
+    final auth = context.read<AuthProvider>();
+    if (auth.backendUrl != null && auth.backendUrl!.isNotEmpty) {
+      try {
+        final uri = Uri.parse(auth.backendUrl!);
+        if (uri.host.isNotEmpty) {
+          return 'http://${uri.host}:3001';
+        }
+      } catch (e) {
+        // If parsing fails, continue to device IP detection
+      }
+    }
+    
+    // Fallback to device IP detection
+    try {
+      final info = NetworkInfo();
+      final wifiIP = await info.getWifiIP();
+      if (wifiIP != null && wifiIP.isNotEmpty) {
+        return 'http://$wifiIP:3001';
+      }
+    } catch (e) {
+      // If we can't get IP, fall back to localhost
+    }
+    return 'http://192.168.1.100:3001';
+  }
+
+  /// Get default broker URL - prioritize logged-in backend IP, then device IP  
+  Future<String> _getDefaultBrokerUrl() async {
+    // First try to use the IP from the logged-in backend
+    final auth = context.read<AuthProvider>();
+    if (auth.backendUrl != null && auth.backendUrl!.isNotEmpty) {
+      try {
+        final uri = Uri.parse(auth.backendUrl!);
+        if (uri.host.isNotEmpty) {
+          return 'mqtt://${uri.host}:1883';
+        }
+      } catch (e) {
+        // If parsing fails, continue to device IP detection
+      }
+    }
+    
+    // Fallback to device IP detection
+    try {
+      final info = NetworkInfo();
+      final wifiIP = await info.getWifiIP();
+      if (wifiIP != null && wifiIP.isNotEmpty) {
+        return 'mqtt://$wifiIP:1883';
+      }
+    } catch (e) {
+      // If we can't get IP, fall back to localhost
+    }
+    return 'mqtt://192.168.1.100:1883';
   }
 
   @override
@@ -369,6 +426,10 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
       
       // Check if we found the correct characteristic
       if (bluetooth.isConnected) {
+        // Get default URLs based on current device IP
+        final defaultBackendUrl = await _getDefaultBackendUrl();
+        final defaultBrokerUrl = await _getDefaultBrokerUrl();
+        
         setState(() {
           _showProvisioningForm = true;
           // Pre-fill device name with connected device name or ID
@@ -376,12 +437,12 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
               ? device.name 
               : 'Device_${device.id.toString().substring(0, 8)}';
           
-          // Pre-fill URLs with defaults if empty
+          // Pre-fill URLs with device IP-based defaults if empty
           if (_backendUrlController.text.trim().isEmpty) {
-            _backendUrlController.text = 'http://192.168.1.100:3001';
+            _backendUrlController.text = defaultBackendUrl;
           }
           if (_brokerUrlController.text.trim().isEmpty) {
-            _brokerUrlController.text = 'mqtt://192.168.1.100:1883';
+            _brokerUrlController.text = defaultBrokerUrl;
           }
         });
         
@@ -394,7 +455,9 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
           );
         }
       } else {
-        throw Exception('Failed to establish proper connection');
+        if (mounted) {
+          throw Exception('Failed to establish proper connection');
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -433,7 +496,7 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
         ssid: _ssidController.text.trim(),
         wifiPassword: _wifiPasswordController.text.trim(),
         userUuid: auth.uuid ?? '',
-        userPassword: '', // This would typically come from auth
+        userPassword: auth.password ?? '', // This would typically come from auth
         backendUrl: _backendUrlController.text.trim(),
         brokerUrl: _brokerUrlController.text.trim(),
       );

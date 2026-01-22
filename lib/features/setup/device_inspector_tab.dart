@@ -13,6 +13,7 @@ class DeviceInspectorTab extends StatefulWidget {
 class _DeviceInspectorTabState extends State<DeviceInspectorTab> {
   List<BluetoothService>? _services;
   bool _isLoading = false;
+  bool _hasTriggeredLoad = false; // Prevent infinite loading
   BluetoothCharacteristic? _selectedWifiCharacteristic;
   BluetoothCharacteristic? _selectedSensorCharacteristic;
 
@@ -20,6 +21,17 @@ class _DeviceInspectorTabState extends State<DeviceInspectorTab> {
   void initState() {
     super.initState();
     // Don't call _loadServices() here as context.read may not be available
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Reset loading state when dependencies change
+    final bluetooth = context.read<IoTBluetoothService>();
+    if (!bluetooth.isConnected) {
+      _hasTriggeredLoad = false;
+      _services = null;
+    }
   }
 
   Future<void> _loadServices() async {
@@ -70,7 +82,10 @@ class _DeviceInspectorTabState extends State<DeviceInspectorTab> {
               if (bluetooth.isConnected) {
                 return IconButton(
                   icon: const Icon(Icons.refresh),
-                  onPressed: _loadServices,
+                  onPressed: () {
+                    _hasTriggeredLoad = false;
+                    _loadServices();
+                  },
                   tooltip: 'Refresh',
                 );
               }
@@ -81,10 +96,17 @@ class _DeviceInspectorTabState extends State<DeviceInspectorTab> {
       ),
       body: Consumer<IoTBluetoothService>(
         builder: (context, bluetooth, _) {
-          // Load services when connected and not already loaded
-          if (bluetooth.isConnected && _services == null && !_isLoading) {
+          // Load services when connected and not already loaded or loading
+          if (bluetooth.isConnected && _services == null && !_isLoading && !_hasTriggeredLoad) {
             print('DeviceInspector: Triggering service load via addPostFrameCallback');
+            _hasTriggeredLoad = true;
             WidgetsBinding.instance.addPostFrameCallback((_) => _loadServices());
+          }
+          
+          // Reset trigger flag if disconnected
+          if (!bluetooth.isConnected && _hasTriggeredLoad) {
+            _hasTriggeredLoad = false;
+            _services = null;
           }
           
           // Update selected characteristics to match current characteristics
