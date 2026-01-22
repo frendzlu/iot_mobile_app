@@ -39,6 +39,8 @@ dependencies:
   network_info_plus:
   uuid:
   connectivity_plus: ^5.0.2
+  flutter_blue_plus: ^1.33.0
+  provider:
 
 dev_dependencies:
   flutter_test:
