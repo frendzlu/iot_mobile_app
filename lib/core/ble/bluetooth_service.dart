@@ -25,6 +25,7 @@ class IoTBluetoothService extends ChangeNotifier {
   final List<BluetoothDevice> _discoveredDevices = [];
   bool _isScanning = false;
   bool _isConnected = false;
+  bool _showUnnamedDevicesInLogs = false;
   
   final StreamController<SensorData> _sensorDataController = StreamController<SensorData>.broadcast();
   StreamSubscription? _characteristicSubscription;
@@ -35,6 +36,11 @@ class IoTBluetoothService extends ChangeNotifier {
   bool get isConnected => _isConnected;
   BluetoothDevice? get connectedDevice => _connectedDevice;
   Stream<SensorData> get sensorDataStream => _sensorDataController.stream;
+
+  // Setters
+  set showUnnamedDevicesInLogs(bool value) {
+    _showUnnamedDevicesInLogs = value;
+  }
 
   void _initializeService() {
     _logService.info('BLE', 'Bluetooth service initialized');
@@ -99,7 +105,10 @@ class IoTBluetoothService extends ChangeNotifier {
         for (final result in results) {
           if (!_discoveredDevices.any((d) => d.id == result.device.id)) {
             _discoveredDevices.add(result.device);
-            _log('Found device: ${result.device.name.isNotEmpty ? result.device.name : result.device.id.toString()}');
+            // Only log named devices if filter is enabled
+            if (_showUnnamedDevicesInLogs || result.device.name.isNotEmpty) {
+              _log('Found device: ${result.device.name.isNotEmpty ? result.device.name : result.device.id.toString()}');
+            }
           }
         }
         notifyListeners();
@@ -165,8 +174,8 @@ class IoTBluetoothService extends ChangeNotifier {
     final services = await _connectedDevice!.discoverServices();
 
     // Look for our specific service UUID (0x1816)
-    const String targetServiceUuid = "00001816-0000-1000-8000-00805f9b34fb";
-    const String targetCharUuid = "00002a01-0000-1000-8000-00805f9b34fb";
+    const String targetServiceUuid = "1816";
+    const String targetCharUuid = "2a01";
 
     for (final service in services) {
       _log('Found service: ${service.uuid}');
@@ -246,13 +255,88 @@ class IoTBluetoothService extends ChangeNotifier {
       final payload = utf8.encode(jsonData);
       
       _log('Sending JSON: $jsonData');
+      _log('Payload size: ${payload.length} bytes');
       
-      await _writeCharacteristic!.write(payload, withoutResponse: false);
+      // Try to negotiate a larger MTU first
+      try {
+        final mtu = await _connectedDevice!.requestMtu(247); // Max MTU for most devices
+        _log('MTU negotiated: $mtu bytes');
+      } catch (e) {
+        _log('MTU negotiation failed, using default: $e', level: models.LogLevel.warning);
+      }
+      
+      // Check if we need to chunk the data
+      const int maxChunkSize = 200; // Safe chunk size for most BLE implementations
+      
+      if (payload.length <= maxChunkSize) {
+        // Single write
+        await _writeCharacteristic!.write(payload, withoutResponse: false);
+      } else {
+        // Chunked write
+        _log('Data too large, sending in chunks...');
+        
+        for (int i = 0; i < payload.length; i += maxChunkSize) {
+          final endIndex = (i + maxChunkSize < payload.length) ? i + maxChunkSize : payload.length;
+          final chunk = payload.sublist(i, endIndex);
+          
+          _log('Sending chunk ${(i ~/ maxChunkSize) + 1}/${((payload.length - 1) ~/ maxChunkSize) + 1} (${chunk.length} bytes)');
+          
+          await _writeCharacteristic!.write(chunk, withoutResponse: false);
+          
+          // Small delay between chunks
+          await Future.delayed(const Duration(milliseconds: 50));
+        }
+      }
       
       _log('Provisioning data sent successfully', level: models.LogLevel.success);
     } catch (e) {
       _log('Failed to send provisioning data: $e', level: models.LogLevel.error);
       rethrow;
+    }
+  }
+
+  /// Set custom WiFi provisioning characteristic
+  void setWifiProvisioningCharacteristic(BluetoothCharacteristic characteristic) {
+    _writeCharacteristic = characteristic;
+    _log('Manually set WiFi provisioning characteristic: ${characteristic.uuid}', level: models.LogLevel.success);
+    notifyListeners();
+  }
+
+  /// Get current WiFi provisioning characteristic
+  BluetoothCharacteristic? get wifiProvisioningCharacteristic => _writeCharacteristic;
+
+  /// Set custom sensor data notify characteristic
+  Future<void> setSensorDataCharacteristic(BluetoothCharacteristic characteristic) async {
+    // Unsubscribe from previous characteristic if any
+    if (_notifyCharacteristic != null) {
+      try {
+        await _notifyCharacteristic!.setNotifyValue(false);
+        await _characteristicSubscription?.cancel();
+      } catch (e) {
+        _log('Error unsubscribing from previous characteristic: $e', level: models.LogLevel.warning);
+      }
+    }
+    
+    _notifyCharacteristic = characteristic;
+    _log('Manually set sensor data characteristic: ${characteristic.uuid}', level: models.LogLevel.success);
+    
+    // Subscribe to the new characteristic
+    await _subscribeToNotifications();
+    notifyListeners();
+  }
+
+  /// Get current sensor data notify characteristic
+  BluetoothCharacteristic? get sensorDataCharacteristic => _notifyCharacteristic;
+
+  /// Get detailed services information for device inspection
+  Future<List<BluetoothService>?> getServicesInfo() async {
+    if (_connectedDevice == null || !_isConnected) return null;
+    
+    try {
+      return await _connectedDevice!.discoverServices();
+    } catch (e) {
+      _log('Failed to get services info: $e', level: models.LogLevel.error);
+      return null;
     }
   }
 

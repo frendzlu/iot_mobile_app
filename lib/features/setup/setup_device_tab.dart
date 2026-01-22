@@ -16,10 +16,9 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
   BluetoothDevice? _selectedDevice;
   
   // Provisioning form controllers
+  final _deviceNameController = TextEditingController();
   final _ssidController = TextEditingController();
   final _wifiPasswordController = TextEditingController();
-  final _customField1Controller = TextEditingController();
-  final _customField2Controller = TextEditingController();
 
   bool _showProvisioningForm = false;
   bool _isProvisioning = false;
@@ -28,6 +27,7 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(
         title: const Text('Device Setup'),
         actions: [
@@ -47,8 +47,13 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
       ),
       body: Consumer<IoTBluetoothService>(
         builder: (context, bluetooth, _) {
-          return Padding(
-            padding: const EdgeInsets.all(16),
+          return SingleChildScrollView(
+            padding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: 16,
+              bottom: 16 + MediaQuery.of(context).viewInsets.bottom,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -113,7 +118,11 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
               children: [
                 Checkbox(
                   value: _showUnnamedDevices,
-                  onChanged: (value) => setState(() => _showUnnamedDevices = value ?? false),
+                  onChanged: (value) {
+                    setState(() => _showUnnamedDevices = value ?? false);
+                    // Also update the logging filter in bluetooth service
+                    bluetooth.showUnnamedDevicesInLogs = _showUnnamedDevices;
+                  },
                 ),
                 const Text('Show unnamed devices'),
               ],
@@ -194,6 +203,17 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
             const SizedBox(height: 16),
             
             TextField(
+              controller: _deviceNameController,
+              decoration: const InputDecoration(
+                labelText: 'Device Name *',
+                hintText: 'Enter a name for this device',
+                prefixIcon: Icon(Icons.device_hub),
+              ),
+            ),
+            
+            const SizedBox(height: 16),
+            
+            TextField(
               controller: _ssidController,
               decoration: const InputDecoration(
                 labelText: 'WiFi SSID *',
@@ -212,28 +232,6 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
                 prefixIcon: Icon(Icons.lock),
               ),
               obscureText: true,
-            ),
-            
-            const SizedBox(height: 16),
-            
-            TextField(
-              controller: _customField1Controller,
-              decoration: const InputDecoration(
-                labelText: 'Custom Field 1',
-                hintText: 'Optional custom parameter',
-                prefixIcon: Icon(Icons.settings),
-              ),
-            ),
-            
-            const SizedBox(height: 16),
-            
-            TextField(
-              controller: _customField2Controller,
-              decoration: const InputDecoration(
-                labelText: 'Custom Field 2',
-                hintText: 'Optional custom parameter',
-                prefixIcon: Icon(Icons.settings),
-              ),
             ),
             
             const SizedBox(height: 20),
@@ -282,6 +280,10 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
       if (bluetooth.isConnected) {
         setState(() {
           _showProvisioningForm = true;
+          // Pre-fill device name with connected device name or ID
+          _deviceNameController.text = device.name.isNotEmpty 
+              ? device.name 
+              : 'Device_${device.id.toString().substring(0, 8)}';
         });
         
         if (mounted) {
@@ -308,10 +310,12 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
   }
 
   Future<void> _sendProvisioningData(IoTBluetoothService bluetooth) async {
-    if (_ssidController.text.trim().isEmpty || _wifiPasswordController.text.trim().isEmpty) {
+    if (_deviceNameController.text.trim().isEmpty ||
+        _ssidController.text.trim().isEmpty || 
+        _wifiPasswordController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please fill in WiFi SSID and Password'),
+          content: Text('Please fill in Device Name, WiFi SSID, and Password'),
           backgroundColor: Colors.orange,
         ),
       );
@@ -324,14 +328,12 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
 
     try {
       final config = ProvisioningConfig(
-        deviceName: _selectedDevice?.name ?? _selectedDevice!.id.toString(),
+        deviceName: _deviceNameController.text.trim(),
         ssid: _ssidController.text.trim(),
         wifiPassword: _wifiPasswordController.text.trim(),
         userUuid: auth.uuid ?? '',
         userPassword: '', // This would typically come from auth
         backendUrl: auth.backendUrl ?? '',
-        customField1: _customField1Controller.text.trim(),
-        customField2: _customField2Controller.text.trim(),
       );
 
       await bluetooth.sendProvisioningData(config);
@@ -344,9 +346,9 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
           ),
         );
         
-        // Clear form and hide it
-        _clearForm();
-        setState(() => _showProvisioningForm = false);
+        // Clear form but keep it visible for potential WiFi changes
+        // _clearForm(); // Don't clear form in case user wants to retry with different WiFi
+        // Keep form open in case device fails to connect and user needs to change WiFi
       }
     } catch (e) {
       if (mounted) {
@@ -372,18 +374,16 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
   }
 
   void _clearForm() {
+    _deviceNameController.clear();
     _ssidController.clear();
     _wifiPasswordController.clear();
-    _customField1Controller.clear();
-    _customField2Controller.clear();
   }
 
   @override
   void dispose() {
+    _deviceNameController.dispose();
     _ssidController.dispose();
     _wifiPasswordController.dispose();
-    _customField1Controller.dispose();
-    _customField2Controller.dispose();
     super.dispose();
   }
 }

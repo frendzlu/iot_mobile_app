@@ -5,8 +5,6 @@ class ProvisioningConfig {
   final String userUuid;
   final String userPassword;
   final String backendUrl;
-  final String? customField1;
-  final String? customField2;
 
   ProvisioningConfig({
     required this.deviceName,
@@ -15,8 +13,6 @@ class ProvisioningConfig {
     required this.userUuid,
     required this.userPassword,
     required this.backendUrl,
-    this.customField1,
-    this.customField2,
   });
 
   Map<String, dynamic> toJson() {
@@ -27,8 +23,6 @@ class ProvisioningConfig {
       'userUuid': userUuid,
       'userPassword': userPassword,
       'backendUrl': backendUrl,
-      if (customField1?.isNotEmpty == true) 'customField1': customField1,
-      if (customField2?.isNotEmpty == true) 'customField2': customField2,
     };
   }
 }
