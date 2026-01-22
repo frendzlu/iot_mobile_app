@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../../core/ble/bluetooth_service.dart';
 import '../../models/provisioning_config.dart';
+import '../../models/device_status.dart';
 import '../auth/auth_provider.dart';
 
 class SetupDeviceTab extends StatefulWidget {
@@ -19,10 +20,67 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
   final _deviceNameController = TextEditingController();
   final _ssidController = TextEditingController();
   final _wifiPasswordController = TextEditingController();
+  final _backendUrlController = TextEditingController();
+  final _brokerUrlController = TextEditingController();
 
   bool _showProvisioningForm = false;
   bool _isProvisioning = false;
   bool _showUnnamedDevices = false;
+  DeviceStatus? _lastDeviceStatus;
+  
+  @override
+  void initState() {
+    super.initState();
+    // Listen for device status updates
+    _listenToDeviceStatus();
+  }
+  
+  void _listenToDeviceStatus() {
+    context.read<IoTBluetoothService>().deviceStatusStream.listen((status) {
+      if (mounted) {
+        setState(() {
+          _lastDeviceStatus = status;
+        });
+        
+        // Show status updates in snackbars
+        _showStatusUpdate(status);
+      }
+    });
+  }
+  
+  void _showStatusUpdate(DeviceStatus status) {
+    String message = '';
+    Color backgroundColor = Colors.blue;
+    
+    if (status.errorMessage != null) {
+      message = 'Error: ${status.errorMessage}';
+      backgroundColor = Colors.red;
+    } else if (status.isFullyProvisioned) {
+      message = 'Device fully provisioned and registered!';
+      backgroundColor = Colors.green;
+    } else {
+      // Show incremental progress
+      final updates = <String>[];
+      if (status.isWifiConnected) updates.add('WiFi connected${status.wifiSsid != null ? ' to ${status.wifiSsid}' : ''}');
+      if (status.isMqttConnected) updates.add('MQTT connected');
+      if (status.isRegistered) updates.add('Device registered');
+      
+      if (updates.isNotEmpty) {
+        message = updates.last;
+        backgroundColor = Colors.green;
+      }
+    }
+    
+    if (message.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: backgroundColor,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -234,6 +292,34 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
               obscureText: true,
             ),
             
+            const SizedBox(height: 16),
+            
+            TextField(
+              controller: _backendUrlController,
+              decoration: const InputDecoration(
+                labelText: 'Backend URL *',
+                hintText: 'http://your-backend-server.com:3001',
+                prefixIcon: Icon(Icons.cloud),
+              ),
+            ),
+            
+            const SizedBox(height: 16),
+            
+            TextField(
+              controller: _brokerUrlController,
+              decoration: const InputDecoration(
+                labelText: 'MQTT Broker URL *',
+                hintText: 'mqtt://your-mqtt-broker.com:1883',
+                prefixIcon: Icon(Icons.router),
+              ),
+            ),
+            
+            // Device Status Display
+            if (_lastDeviceStatus != null) ...[
+              const SizedBox(height: 20),
+              _buildDeviceStatusCard(),
+            ],
+            
             const SizedBox(height: 20),
             
             Row(
@@ -268,6 +354,11 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
 
   Future<void> _connectToDevice(BluetoothDevice device, IoTBluetoothService bluetooth) async {
     try {
+      // Clear previous status when connecting to new device
+      setState(() {
+        _lastDeviceStatus = null;
+      });
+      
       await bluetooth.connectToDevice(device);
       setState(() {
         _selectedDevice = device;
@@ -284,6 +375,14 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
           _deviceNameController.text = device.name.isNotEmpty 
               ? device.name 
               : 'Device_${device.id.toString().substring(0, 8)}';
+          
+          // Pre-fill URLs with defaults if empty
+          if (_backendUrlController.text.trim().isEmpty) {
+            _backendUrlController.text = 'http://192.168.1.100:3001';
+          }
+          if (_brokerUrlController.text.trim().isEmpty) {
+            _brokerUrlController.text = 'mqtt://192.168.1.100:1883';
+          }
         });
         
         if (mounted) {
@@ -312,10 +411,12 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
   Future<void> _sendProvisioningData(IoTBluetoothService bluetooth) async {
     if (_deviceNameController.text.trim().isEmpty ||
         _ssidController.text.trim().isEmpty || 
-        _wifiPasswordController.text.trim().isEmpty) {
+        _wifiPasswordController.text.trim().isEmpty ||
+        _backendUrlController.text.trim().isEmpty ||
+        _brokerUrlController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please fill in Device Name, WiFi SSID, and Password'),
+          content: Text('Please fill in all required fields'),
           backgroundColor: Colors.orange,
         ),
       );
@@ -333,7 +434,8 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
         wifiPassword: _wifiPasswordController.text.trim(),
         userUuid: auth.uuid ?? '',
         userPassword: '', // This would typically come from auth
-        backendUrl: auth.backendUrl ?? '',
+        backendUrl: _backendUrlController.text.trim(),
+        brokerUrl: _brokerUrlController.text.trim(),
       );
 
       await bluetooth.sendProvisioningData(config);
@@ -384,6 +486,121 @@ class _SetupDeviceTabState extends State<SetupDeviceTab> {
     _deviceNameController.dispose();
     _ssidController.dispose();
     _wifiPasswordController.dispose();
+    _backendUrlController.dispose();
+    _brokerUrlController.dispose();
     super.dispose();
+  }
+
+  Widget _buildDeviceStatusCard() {
+    if (_lastDeviceStatus == null) return const SizedBox.shrink();
+    
+    final status = _lastDeviceStatus!;
+    
+    return Card(
+      color: status.errorMessage != null 
+          ? Colors.red.withOpacity(0.1)
+          : status.isFullyProvisioned
+              ? Colors.green.withOpacity(0.1)
+              : Colors.blue.withOpacity(0.1),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  status.errorMessage != null
+                      ? Icons.error
+                      : status.isFullyProvisioned
+                          ? Icons.check_circle
+                          : Icons.info,
+                  color: status.errorMessage != null
+                      ? Colors.red
+                      : status.isFullyProvisioned
+                          ? Colors.green
+                          : Colors.blue,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Device Status',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                Text(
+                  status.timestamp.toLocal().toString().split('.').first,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            
+            if (status.errorMessage != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'Error: ${status.errorMessage}',
+                  style: const TextStyle(color: Colors.red),
+                ),
+              ),
+            
+            _buildStatusIndicator('WiFi Connection', status.isWifiConnected, status.wifiSsid),
+            const SizedBox(height: 4),
+            _buildStatusIndicator('MQTT Connection', status.isMqttConnected, status.mqttBrokerUrl),
+            const SizedBox(height: 4),
+            _buildStatusIndicator('Device Registration', status.isRegistered, null),
+            
+            if (status.isFullyProvisioned)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  '\u2713 Device is fully provisioned and ready!',
+                  style: TextStyle(
+                    color: Colors.green[700],
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildStatusIndicator(String label, bool isSuccess, String? details) {
+    return Row(
+      children: [
+        Icon(
+          isSuccess ? Icons.check_circle : Icons.radio_button_unchecked,
+          color: isSuccess ? Colors.green : Colors.grey,
+          size: 16,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: RichText(
+            text: TextSpan(
+              children: [
+                TextSpan(
+                  text: label,
+                  style: TextStyle(
+                    color: Theme.of(context).textTheme.bodyMedium?.color,
+                    fontWeight: isSuccess ? FontWeight.w500 : FontWeight.normal,
+                  ),
+                ),
+                if (details != null && isSuccess)
+                  TextSpan(
+                    text: ' ($details)',
+                    style: TextStyle(
+                      color: Theme.of(context).textTheme.bodySmall?.color,
+                      fontSize: 12,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }

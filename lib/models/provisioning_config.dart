@@ -5,6 +5,7 @@ class ProvisioningConfig {
   final String userUuid;
   final String userPassword;
   final String backendUrl;
+  final String brokerUrl;
 
   ProvisioningConfig({
     required this.deviceName,
@@ -13,6 +14,7 @@ class ProvisioningConfig {
     required this.userUuid,
     required this.userPassword,
     required this.backendUrl,
+    required this.brokerUrl,
   });
 
   Map<String, dynamic> toJson() {
@@ -23,6 +25,7 @@ class ProvisioningConfig {
       'userUuid': userUuid,
       'userPassword': userPassword,
       'backendUrl': backendUrl,
+      'brokerUrl': brokerUrl,
     };
   }
 }

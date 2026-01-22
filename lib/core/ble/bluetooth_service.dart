@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../logging/log_service.dart';
 import '../../models/provisioning_config.dart';
 import '../../models/sensor_data.dart';
+import '../../models/device_status.dart';
 import '../../models/log_entry.dart' as models;
 
 class IoTBluetoothService extends ChangeNotifier {
@@ -28,7 +29,12 @@ class IoTBluetoothService extends ChangeNotifier {
   bool _showUnnamedDevicesInLogs = false;
   
   final StreamController<SensorData> _sensorDataController = StreamController<SensorData>.broadcast();
+  final StreamController<DeviceStatus> _deviceStatusController = StreamController<DeviceStatus>.broadcast();
   StreamSubscription? _characteristicSubscription;
+  
+  // Device status tracking
+  DeviceStatus? _lastDeviceStatus;
+  BluetoothCharacteristic? _statusCharacteristic;
 
   // Getters
   List<BluetoothDevice> get discoveredDevices => List.unmodifiable(_discoveredDevices);
@@ -36,6 +42,8 @@ class IoTBluetoothService extends ChangeNotifier {
   bool get isConnected => _isConnected;
   BluetoothDevice? get connectedDevice => _connectedDevice;
   Stream<SensorData> get sensorDataStream => _sensorDataController.stream;
+  Stream<DeviceStatus> get deviceStatusStream => _deviceStatusController.stream;
+  DeviceStatus? get lastDeviceStatus => _lastDeviceStatus;
 
   // Setters
   set showUnnamedDevicesInLogs(bool value) {
@@ -207,6 +215,17 @@ class IoTBluetoothService extends ChangeNotifier {
             // Subscribe to notifications
             await _subscribeToNotifications();
           }
+          
+          // Look for status characteristic (could be the same as sensor data or separate)
+          if (characteristic.properties.notify && characteristic.uuid.toString().toLowerCase().contains('status')) {
+            _statusCharacteristic = characteristic;
+            _log('Found status characteristic: ${characteristic.uuid}', level: models.LogLevel.success);
+            await _subscribeToStatusNotifications();
+          } else if (_statusCharacteristic == null && characteristic.properties.notify) {
+            // If no dedicated status characteristic found, use the general notify characteristic for status too
+            _statusCharacteristic = characteristic;
+            _log('Using general notify characteristic for status: ${characteristic.uuid}');
+          }
         }
       }
     }
@@ -219,7 +238,7 @@ class IoTBluetoothService extends ChangeNotifier {
     try {
       await _notifyCharacteristic!.setNotifyValue(true);
       _characteristicSubscription = _notifyCharacteristic!.value.listen((value) {
-        _handleSensorData(value);
+        _handleIncomingData(value, isStatusData: false);
       });
       _log('Subscribed to sensor data notifications', level: models.LogLevel.success);
     } catch (e) {
@@ -227,18 +246,87 @@ class IoTBluetoothService extends ChangeNotifier {
     }
   }
 
-  /// Handle incoming sensor data
-  void _handleSensorData(List<int> data) {
+  /// Subscribe to status characteristic notifications
+  Future<void> _subscribeToStatusNotifications() async {
+    if (_statusCharacteristic == null || _statusCharacteristic == _notifyCharacteristic) return;
+
+    try {
+      await _statusCharacteristic!.setNotifyValue(true);
+      _statusCharacteristic!.value.listen((value) {
+        _handleIncomingData(value, isStatusData: true);
+      });
+      _log('Subscribed to status notifications', level: models.LogLevel.success);
+    } catch (e) {
+      _log('Failed to subscribe to status notifications: $e', level: models.LogLevel.error);
+    }
+  }
+
+  /// Handle incoming data - could be sensor data or device status
+  void _handleIncomingData(List<int> data, {bool isStatusData = false}) {
     try {
       final jsonString = utf8.decode(data);
       final jsonData = jsonDecode(jsonString);
       
+      // Check if this is status data
+      if (isStatusData || _isStatusMessage(jsonData)) {
+        _handleDeviceStatus(jsonData);
+      } else {
+        _handleSensorData(jsonData);
+      }
+    } catch (e) {
+      _log('Failed to parse incoming data: $e', level: models.LogLevel.error);
+    }
+  }
+
+  /// Check if the JSON data represents a status message
+  bool _isStatusMessage(Map<String, dynamic> jsonData) {
+    // Status messages should contain status-related fields
+    return jsonData.containsKey('wifiConnected') ||
+           jsonData.containsKey('mqttConnected') ||
+           jsonData.containsKey('registered') ||
+           jsonData.containsKey('status') ||
+           jsonData.containsKey('deviceName');
+  }
+
+  /// Handle incoming sensor data
+  void _handleSensorData(Map<String, dynamic> jsonData) {
+    try {
       final sensorData = SensorData.fromJson(jsonData);
       _sensorDataController.add(sensorData);
       
       _log('Received sensor data: ${sensorData.sensor} = ${sensorData.value}${sensorData.unit ?? ''}');
     } catch (e) {
       _log('Failed to parse sensor data: $e', level: models.LogLevel.error);
+    }
+  }
+
+  /// Handle incoming device status
+  void _handleDeviceStatus(Map<String, dynamic> jsonData) {
+    try {
+      final deviceStatus = DeviceStatus.fromJson(jsonData);
+      _lastDeviceStatus = deviceStatus;
+      _deviceStatusController.add(deviceStatus);
+      
+      _log('Received device status: ${deviceStatus.statusDescription}', level: models.LogLevel.info);
+      
+      // Log any errors
+      if (deviceStatus.errorMessage != null) {
+        _log('Device reported error: ${deviceStatus.errorMessage}', level: models.LogLevel.warning);
+      }
+      
+      // Log successful milestones
+      if (deviceStatus.isWifiConnected && deviceStatus.wifiSsid != null) {
+        _log('Device connected to WiFi: ${deviceStatus.wifiSsid}', level: models.LogLevel.success);
+      }
+      if (deviceStatus.isMqttConnected && deviceStatus.mqttBrokerUrl != null) {
+        _log('Device connected to MQTT: ${deviceStatus.mqttBrokerUrl}', level: models.LogLevel.success);
+      }
+      if (deviceStatus.isRegistered) {
+        _log('Device successfully registered with backend', level: models.LogLevel.success);
+      }
+      
+    } catch (e) {
+      _log('Failed to parse device status: $e', level: models.LogLevel.error);
     }
   }
 
@@ -266,7 +354,16 @@ class IoTBluetoothService extends ChangeNotifier {
       }
       
       // Check if we need to chunk the data
-      const int maxChunkSize = 200; // Safe chunk size for most BLE implementations
+      // MTU includes ATT header (3 bytes), so usable data is MTU - 3
+      int maxChunkSize = 20; // Default safe size
+      
+      try {
+        final currentMtu = await _connectedDevice!.mtu.first;
+        maxChunkSize = currentMtu - 3; // Account for ATT header overhead
+        _log('Using chunk size: $maxChunkSize bytes (MTU: $currentMtu)');
+      } catch (e) {
+        _log('Could not get current MTU, using default chunk size: $e', level: models.LogLevel.warning);
+      }
       
       if (payload.length <= maxChunkSize) {
         // Single write
@@ -328,6 +425,9 @@ class IoTBluetoothService extends ChangeNotifier {
   /// Get current sensor data notify characteristic
   BluetoothCharacteristic? get sensorDataCharacteristic => _notifyCharacteristic;
 
+  /// Get current status notify characteristic  
+  BluetoothCharacteristic? get statusCharacteristic => _statusCharacteristic;
+
   /// Get detailed services information for device inspection
   Future<List<BluetoothService>?> getServicesInfo() async {
     if (_connectedDevice == null || !_isConnected) return null;
@@ -348,6 +448,15 @@ class IoTBluetoothService extends ChangeNotifier {
       await _characteristicSubscription?.cancel();
       _characteristicSubscription = null;
       
+      // Unsubscribe from status notifications if different from sensor notifications
+      if (_statusCharacteristic != null && _statusCharacteristic != _notifyCharacteristic) {
+        try {
+          await _statusCharacteristic!.setNotifyValue(false);
+        } catch (e) {
+          _log('Error unsubscribing from status characteristic: $e', level: models.LogLevel.warning);
+        }
+      }
+      
       try {
         await _connectedDevice!.disconnect();
       } catch (e) {
@@ -357,6 +466,8 @@ class IoTBluetoothService extends ChangeNotifier {
       _connectedDevice = null;
       _writeCharacteristic = null;
       _notifyCharacteristic = null;
+      _statusCharacteristic = null;
+      _lastDeviceStatus = null;
       _isConnected = false;
       
       _log('Disconnected', level: models.LogLevel.info);
@@ -368,6 +479,7 @@ class IoTBluetoothService extends ChangeNotifier {
   void dispose() {
     disconnect();
     _sensorDataController.close();
+    _deviceStatusController.close();
     super.dispose();
   }
 }
